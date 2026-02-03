@@ -1,2 +1,1 @@
-# TNT001
-Yo wassup
+I am still learning python
