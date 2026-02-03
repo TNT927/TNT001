@@ -51,27 +51,35 @@ def live_game(game_pk):
             boxscore = live.get('boxscore', {})
             plays = live.get('plays', {}).get('allPlays', [])
             linescore = live.get('linescore', {})
+
             inning = linescore.get('currentInning',0)
             inning_half = linescore.get('inningHalf','Top')
             outs = linescore.get('outs',0)
             balls = linescore.get('balls',0)
             strikes = linescore.get('strikes',0)
+
             home_team = linescore.get('teams',{}).get('home',{}).get('team',{}).get('name','')
             away_team = linescore.get('teams',{}).get('away',{}).get('team',{}).get('name','')
             home_score = linescore.get('teams',{}).get('home',{}).get('runs',0)
             away_score = linescore.get('teams',{}).get('away',{}).get('runs',0)
+
             current_play = live.get('plays', {}).get('currentPlay', {}).get('matchup', {})
             batter = current_play.get('batter',{}).get('fullName','Unknown')
             pitcher = current_play.get('pitcher',{}).get('fullName','Unknown')
-            home_lineup = [p['person']['fullName'] + '('+p['position']['abbreviation']+')' for p in boxscore.get('teams',{}).get('home',{}).get('players',{}).values()]
-            away_lineup = [p['person']['fullName'] + '('+p['position']['abbreviation']+')' for p in boxscore.get('teams',{}).get('away',{}).get('players',{}).values()]
+
+            home_lineup = [p['person']['fullName'] + '('+p['position']['abbreviation']+')' 
+                           for p in boxscore.get('teams',{}).get('home',{}).get('players',{}).values()]
+            away_lineup = [p['person']['fullName'] + '('+p['position']['abbreviation']+')' 
+                           for p in boxscore.get('teams',{}).get('away',{}).get('players',{}).values()]
+
             last_5 = plays[-5:] if len(plays)>=5 else plays
 
             clear_terminal()
             print(f"⚾ Live Game: {away_team} @ {home_team}")
-            print(f"Inning: {inning_half} {inning}, Outs: {outs}, Balls: {balls}, Strikes: {strikes}")
+            print(f"Inning: {inning_half} {inning} | Outs: {outs} | Balls: {balls} | Strikes: {strikes}")
             print(f"Score: {away_team} {away_score} - {home_team} {home_score}")
             print(f"Batter: {batter} vs Pitcher: {pitcher}\n")
+
             print("Home Lineup:")
             print(', '.join(home_lineup))
             print("\nAway Lineup:")
@@ -86,74 +94,205 @@ def live_game(game_pk):
     except KeyboardInterrupt:
         print("\nExiting live game...")
 
-# ----------------- Player Search -----------------
-def player_search(name):
-    teams = get_json(f'{BASE}/teams', {'sportId':1}).get('teams',[])
+# ----------------- Player Search with Season & Career Stats -----------------
+def live_player_search(name):
+    from prettytable import PrettyTable
+    current_year = datetime.today().year
+
+    teams = get_json(f'{BASE}/teams', {'sportId': 1}).get('teams', [])
     found = []
+
+    # Search all rosters for player
     for t in teams:
-        roster = get_json(f'{BASE}/teams/{t["id"]}/roster').get('roster',[])
+        roster = get_json(f'{BASE}/teams/{t["id"]}/roster').get('roster', [])
         for p in roster:
-            full_name = p['person']['fullName']
-            if name.lower() in full_name.lower():
+            if name.lower() in p['person']['fullName'].lower():
                 found.append((p, t['name']))
+
     if not found:
         print(f"No player found with '{name}'")
         return
-    current_year = datetime.today().year
+
     for p, team_name in found:
         person = p['person']
-        pos = p.get('position', {}).get('abbreviation','')
-        print(f"{person['fullName']} - Team: {team_name} - Position: {pos}")
-        stats = get_json(f'{BASE}/people/{person['id']}/stats', {'stats':'season','season':current_year})
-        if stats.get('stats') and stats['stats'][0]['splits']:
-            split = stats['stats'][0]['splits'][0]['stat']
-            print(f"  {current_year} G:{split.get('games',0)} AVG:{split.get('avg','N/A')} HR:{split.get('homeRuns',0)}")
-        else:
-            print(f"  No stats available for {current_year}")
+        pos = p.get('position', {}).get('abbreviation', 'N/A')
+        print(f"\n⚾ {person['fullName']} - Team: {team_name} - Position: {pos}")
+
+        # ----------------- Season Stats -----------------
+        try:
+            season_data = get_json(f'{BASE}/people/{person["id"]}/stats', {'stats':'statsSingleSeason', 'season':current_year})
+            season_splits = season_data.get('stats', [{}])[0].get('splits', [])
+            if season_splits:
+                split = season_splits[0]['stat']
+                table = PrettyTable()
+                table.title = f"{current_year} Season Stats"
+                table.field_names = ["G","AB","R","H","HR","RBI","BB","SO","AVG","OBP","SLG"]
+                table.add_row([
+                    split.get('games', 0),
+                    split.get('atBats', 0),
+                    split.get('runs', 0),
+                    split.get('hits', 0),
+                    split.get('homeRuns', 0),
+                    split.get('rbi', 0),
+                    split.get('baseOnBalls', 0),
+                    split.get('strikeOuts', 0),
+                    split.get('avg','N/A'),
+                    split.get('onBasePercentage','N/A'),
+                    split.get('sluggingPercentage','N/A')
+                ])
+                print(table)
+            else:
+                print(f"No {current_year} season stats available.")
+        except Exception as e:
+            print(f"Error fetching season stats: {e}")
+
+        # ----------------- Career Stats -----------------
+        try:
+            career_data = get_json(f'{BASE}/people/{person["id"]}/stats', {'stats':'careerRegularSeason'})
+            career_splits = career_data.get('stats', [{}])[0].get('splits', [])
+            if career_splits:
+                split = career_splits[0]['stat']
+                table = PrettyTable()
+                table.title = "Career Stats"
+                table.field_names = ["G","AB","R","H","HR","RBI","BB","SO","AVG","OBP","SLG"]
+                table.add_row([
+                    split.get('games', 0),
+                    split.get('atBats', 0),
+                    split.get('runs', 0),
+                    split.get('hits', 0),
+                    split.get('homeRuns', 0),
+                    split.get('rbi', 0),
+                    split.get('baseOnBalls', 0),
+                    split.get('strikeOuts', 0),
+                    split.get('avg','N/A'),
+                    split.get('onBasePercentage','N/A'),
+                    split.get('sluggingPercentage','N/A')
+                ])
+                print(table)
+            else:
+                print("No career stats available.")
+        except Exception as e:
+            print(f"Error fetching career stats: {e}")
 
 # ----------------- Standings -----------------
 def show_standings():
-    data = get_json(f'{BASE}/standings?leagueId=103,104').get('records',[])
+    data = get_json(
+        f'{BASE}/standings?leagueId=103,104&hydrate=team(division,league)'
+    ).get('records', [])
+
+    leagues = {}
+
+    # Group divisions by league
     for division in data:
-        div_name = division.get('division', {}).get('name','Unknown Division')
-        table = PrettyTable()
-        table.field_names = ["Team","W","L","Win%","GB","Home","Away","RS/G","RA/G","Streak"]
-        for team_record in division.get('teamRecords',[]):
-            team = team_record.get('team',{}).get('name','Unknown')
-            w = team_record.get('wins',0)
-            l = team_record.get('losses',0)
-            pct = team_record.get('winningPercentage','0')
-            gb = team_record.get('gamesBack','0')
-            home = f"{team_record.get('homeWins',0)}-{team_record.get('homeLosses',0)}"
-            away = f"{team_record.get('awayWins',0)}-{team_record.get('awayLosses',0)}"
-            rs = round(team_record.get('runsScoredPerGame',0),2)
-            ra = round(team_record.get('runsAllowedPerGame',0),2)
-            streak = team_record.get('streak',{}).get('streakCode','')
-            table.add_row([team,w,l,pct,gb,home,away,rs,ra,streak])
-        print(f"\n=== {div_name} ===")
-        print(table)
+        team_records = division.get('teamRecords', [])
+        if not team_records:
+            continue
+
+        first_team = team_records[0].get('team', {})
+        league_name = first_team.get('league', {}).get('name', 'Unknown League')
+        division_name = first_team.get('division', {}).get('name', 'Unknown Division')
+
+        leagues.setdefault(league_name, []).append((division_name, team_records))
+
+    # Print standings
+    for league_name in sorted(leagues.keys()):
+        print(f"\n===== {league_name.upper()} =====")
+
+        for division_name, team_records in leagues[league_name]:
+            table = PrettyTable()
+            table.field_names = ["Team","W","L","Win%","GB","Home","Away","RS/G","RA/G","Streak"]
+
+            # Sort teams (Win% desc, Wins desc)
+            team_records.sort(
+                key=lambda t: (float(t.get('winningPercentage', 0)), t.get('wins', 0)),
+                reverse=True
+            )
+
+            for tr in team_records:
+                table.add_row([
+                    tr.get('team', {}).get('name', 'Unknown'),
+                    tr.get('wins', 0),
+                    tr.get('losses', 0),
+                    tr.get('winningPercentage', '0'),
+                    tr.get('gamesBack', '-'),
+                    f"{tr.get('homeWins',0)}-{tr.get('homeLosses',0)}",
+                    f"{tr.get('awayWins',0)}-{tr.get('awayLosses',0)}",
+                    round(tr.get('runsScoredPerGame', 0), 2),
+                    round(tr.get('runsAllowedPerGame', 0), 2),
+                    tr.get('streak', {}).get('streakCode', '')
+                ])
+
+            print(f"\n--- {division_name} ---")
+            print(table)
 
 # ----------------- Lineups -----------------
+from prettytable import PrettyTable
+from colorama import Fore, Style
+
 def show_lineups(game_pk):
     data = get_json(f'{BASE}/game/{game_pk}/feed/live')
     boxscore = data.get('liveData',{}).get('boxscore',{})
-    def print_team_lineup(team):
+    
+    def print_team_lineup(team, is_home=True):
         team_name = team.get('team',{}).get('name','Unknown')
-        print(f"\n⚾ {team_name} Lineup")
+        color = Fore.CYAN if is_home else Fore.MAGENTA
+        print(f"\n{color}⚾ {team_name} Lineup{Style.RESET_ALL}")
+
         table = PrettyTable()
-        table.field_names = ["Order","Player","Pos","Status"]
-        players = team.get('players',{}).values()
-        for p in sorted(players,key=lambda x: x.get('battingOrder',0)):
+        table.field_names = ["#","Player","Pos","Status","AVG","HR","RBI","🔥/❄️"]
+        
+        players = sorted(team.get('players',{}).values(), key=lambda x: x.get('battingOrder', 0))
+        for p in players:
             order = p.get('battingOrder',0)
+            if order == 0:
+                order = '-'  # Bench/substitute
             name = p['person']['fullName']
             pos = p.get('position',{}).get('abbreviation','')
             status = p.get('status',{}).get('description','Active')
-            table.add_row([order,name,pos,status])
+
+            # Player stats
+            stats = p.get('stats',{}).get('batting',{})
+            avg = stats.get('avg','N/A')
+            hr = stats.get('homeRuns',0)
+            rbi = stats.get('rbi',0)
+
+            # Hot/Cold indicator
+            if avg != 'N/A':
+                try:
+                    avg_float = float(avg)
+                    if avg_float >= 0.300:
+                        trend = '🔥'
+                    elif avg_float <= 0.200:
+                        trend = '❄️'
+                    else:
+                        trend = ''
+                except:
+                    trend = ''
+            else:
+                trend = ''
+
+            # Highlight injured/day-to-day in red, bench in yellow, starters green
+            if 'Injured' in status or 'Day-to-Day' in status:
+                name = f"{Fore.RED}{name}{Style.RESET_ALL}"
+            elif order == '-':
+                name = f"{Fore.YELLOW}{name}{Style.RESET_ALL}"
+            else:
+                name = f"{Fore.GREEN}{name}{Style.RESET_ALL}"
+
+            table.add_row([order,name,pos,status,avg,hr,rbi,trend])
+        
         print(table)
+
+    # Show pitchers first
     home_team = boxscore.get('teams',{}).get('home',{})
     away_team = boxscore.get('teams',{}).get('away',{})
-    print_team_lineup(away_team)
-    print_team_lineup(home_team)
+
+    for team, is_home in [(away_team, False), (home_team, True)]:
+        # Probable pitcher highlight
+        prob_pitcher = team.get('probablePitcher', {}).get('fullName')
+        if prob_pitcher:
+            print(f"{Fore.YELLOW}Probable Pitcher: {prob_pitcher}{Style.RESET_ALL}")
+        print_team_lineup(team, is_home=is_home)
 
 # ----------------- Game Box Score -----------------
 def game_box_score(game_pk):
@@ -195,48 +334,110 @@ def game_box_score(game_pk):
     print_team_box(away_team)
     print_linescore(home_team)
     print_team_box(home_team)
+from datetime import timezone, timedelta
 
-# ----------------- Team Weekly Schedule -----------------
-def get_team_id(name):
-    teams = get_json(f'{BASE}/teams', {'sportId':1}).get('teams',[])
-    for t in teams:
-        if name.lower() in t['name'].lower():
-            return t['id']
-    return None
-
+# ----------------- Team Schedule (Past 3 + Next 20 Days, EST, colorized) -----------------
 def team_weekly_schedule(team_name):
-    today = datetime.today()
-    end_date = today + timedelta(days=7)
-    team_id = get_team_id(team_name)
-    if not team_id:
-        print(f"Team '{team_name}' not found.")
-        return
-    schedule_data = get_json(f'{BASE}/schedule/games', {
-        'sportId':1, 'teamId':team_id,
-        'startDate':today.strftime('%Y-%m-%d'),
-        'endDate':end_date.strftime('%Y-%m-%d')
-    })
-    games = []
-    if schedule_data.get('dates'):
-        for date_info in schedule_data['dates']:
+    try:
+        teams = get_json(f'{BASE}/teams', {'sportId':1}).get('teams', [])
+        if not teams:
+            print("Error: Could not fetch teams.")
+            return
+
+        matches = [t for t in teams if team_name.lower() in t['name'].lower()]
+        if not matches:
+            print(f"No team found matching '{team_name}'.")
+            return
+        elif len(matches) > 1:
+            print("Multiple teams found:")
+            for idx, t in enumerate(matches, start=1):
+                print(f"{idx}. {t['name']}")
+            choice = input("Select the team number: ")
+            if choice.isdigit() and 1 <= int(choice) <= len(matches):
+                team = matches[int(choice)-1]
+            else:
+                print("Invalid selection.")
+                return
+        else:
+            team = matches[0]
+
+        team_id = team['id']
+
+        today = datetime.now(timezone.utc)
+        start_past = today - timedelta(days=3)
+        end_future = today + timedelta(days=20)
+
+        schedule_data = get_json(f'{BASE}/schedule/games', {
+            'sportId': 1,
+            'teamId': team_id,
+            'startDate': start_past.strftime('%Y-%m-%d'),
+            'endDate': end_future.strftime('%Y-%m-%d')
+        })
+
+        games = []
+        for date_info in schedule_data.get('dates', []):
             for g in date_info.get('games', []):
                 games.append(g)
-    if not games:
-        print(f"No games found for {team_name} in the next 7 days.")
+
+        games.sort(key=lambda x: x.get('gameDate', ''))
+
+        from prettytable import PrettyTable
+        table = PrettyTable()
+        table.field_names = ["Date (EST)", "Opponent", "Home/Away", "Status", "Game ID"]
+
+        if not games:
+            print(f"No games scheduled for {team['name']} in the past 3 or next 20 days.")
+            return
+
+        for idx, game in enumerate(games, start=1):
+            try:
+                home = game['teams']['home']['team']['name']
+                away = game['teams']['away']['team']['name']
+                status = game['status']['detailedState']
+                game_pk = game.get('gamePk', 0)
+                location = 'Home' if home == team['name'] else 'Away'
+                opponent = away if location=='Home' else home
+
+                # Convert UTC to EST
+                game_time_utc = datetime.strptime(game['gameDate'], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+                est_offset = timedelta(hours=-5)
+                game_time_est = game_time_utc + est_offset
+
+                # Highlight: Gray for past, Yellow today, Green future
+                if game_time_est.date() < today.date():
+                    color = '\033[90m'  # Gray
+                elif game_time_est.date() == today.date():
+                    color = '\033[93m'  # Yellow
+                else:
+                    color = '\033[92m'  # Green
+                reset = '\033[0m'
+
+                table.add_row([
+                    f"{color}{game_time_est.strftime('%Y-%m-%d %I:%M %p')}{reset}",
+                    f"{color}{opponent}{reset}",
+                    f"{color}{location}{reset}",
+                    f"{color}{status}{reset}",
+                    f"{color}{game_pk}{reset}"
+                ])
+            except Exception as e:
+                print(f"Error processing a game: {e}")
+                continue
+
+        print(f"\n📅 {team['name']} Schedule (Past 3 + Next 20 Days, EST):")
+        print(table)
+
+        choice = input("\nEnter game number to view live game/box score (or Enter to skip): ")
+        if choice.isdigit() and 1 <= int(choice) <= len(games):
+            game_pk = games[int(choice)-1].get('gamePk',0)
+            # Safe box score: only if game has started
+            box_data = get_json(f'{BASE}/game/{game_pk}/boxscore')
+            if box_data.get('teams'):
+                game_box_score(game_pk)
+            else:
+                print("Box score not available yet for this game.")
+    except Exception as e:
+        print(f"Unexpected error: {e}")
         return
-    print(f"\n📅 {team_name} - Next 7 Days Schedule:")
-    for idx, game in enumerate(games, start=1):
-        home = game['teams']['home']['team']['name']
-        away = game['teams']['away']['team']['name']
-        status = game['status']['detailedState']
-        start_time = game['gameDate'].replace('T',' ').replace('Z','')
-        location = 'Home' if home==team_name else 'Away'
-        game_pk = game.get('gamePk',0)
-        print(f"{idx}. {start_time} | {away} @ {home} | {status} | {location} | Game ID: {game_pk}")
-    choice = input("Enter game number to view live game/box score (or Enter to skip): ")
-    if choice.isdigit() and 1 <= int(choice) <= len(games):
-        game_pk = games[int(choice)-1].get('gamePk',0)
-        live_game(game_pk)
 
 # ----------------- Injuries -----------------
 def get_injuries():
@@ -253,36 +454,40 @@ def main():
         print("4. Live Game")
         print("5. Player Search")
         print("6. Injuries")
-        print("7. Team Weekly Schedule")
+        print("7. Team Schedule Past 3 + Next 20 Days")
         print("8. Game Box Score")
         print("9. Exit")
         choice = input("> ")
-        if choice=='1':
+        
+        if choice == '1':
             todays_games()
-        elif choice=='2':
+        elif choice == '2':
             show_standings()
-        elif choice=='3':
+        elif choice == '3':
             game_pk = input("Enter game ID for lineups: ")
-            if game_pk.isdigit(): show_lineups(int(game_pk))
-        elif choice=='4':
+            if game_pk.isdigit(): 
+                show_lineups(int(game_pk))
+        elif choice == '4':
             game_pk = input("Enter game ID for live game: ")
-            if game_pk.isdigit(): live_game(int(game_pk))
-        elif choice=='5':
+            if game_pk.isdigit(): 
+                live_game(int(game_pk))
+        elif choice == '5':
             name = input("Enter player name: ")
-            player_search(name)
-        elif choice=='6':
+            live_player_search(name)  # <- CALL the live player search function
+        elif choice == '6':
             get_injuries()
-        elif choice=='7':
+        elif choice == '7':
             team_name = input("Enter team name: ")
             team_weekly_schedule(team_name)
-        elif choice=='8':
+        elif choice == '8':
             game_pk = input("Enter game ID for box score: ")
-            if game_pk.isdigit(): game_box_score(int(game_pk))
-        elif choice=='9':
+            if game_pk.isdigit(): 
+                game_box_score(int(game_pk))
+        elif choice == '9':
             print("Exiting CLI.")
             break
         else:
             print("Invalid option.")
 
-if __name__=='__main__':
+if __name__ == '__main__':
     main()
