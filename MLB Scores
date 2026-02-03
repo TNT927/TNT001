@@ -1,0 +1,288 @@
+import requests
+import time
+import os
+from datetime import datetime, timedelta
+from prettytable import PrettyTable
+
+BASE = 'https://statsapi.mlb.com/api/v1'
+
+def get_json(url, params=None):
+    try:
+        r = requests.get(url, params=params)
+        r.raise_for_status()
+        return r.json()
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching data: {e}")
+        return {}
+
+# ----------------- Clear Terminal -----------------
+def clear_terminal():
+    os.system('cls' if os.name=='nt' else 'clear')
+
+# ----------------- Today\'s Games -----------------
+def todays_games():
+    today_str = datetime.today().strftime('%Y-%m-%d')
+    data = get_json(f'{BASE}/schedule/games', {'sportId':1, 'date':today_str})
+    dates = data.get('dates', [])
+    if not dates:
+        print("No games today!")
+        return
+    games = dates[0].get('games', [])
+    for idx, game in enumerate(games, start=1):
+        home = game['teams']['home']['team']['name']
+        away = game['teams']['away']['team']['name']
+        status = game['status']['detailedState']
+        start_time = game['gameDate'].replace('T',' ').replace('Z','')
+        pitcher_home = game['teams']['home'].get('probablePitcher', {}).get('fullName','N/A')
+        pitcher_away = game['teams']['away'].get('probablePitcher', {}).get('fullName','N/A')
+        game_pk = game.get('gamePk',0)
+        print(f"{idx}. {away} @ {home} | {status} | {start_time} | Pitchers: {pitcher_away} vs {pitcher_home} | Game ID: {game_pk}")
+    choice = input("Enter game number to view live game/box score (or Enter to skip): ")
+    if choice.isdigit() and 1 <= int(choice) <= len(games):
+        game_pk = games[int(choice)-1].get('gamePk',0)
+        live_game(game_pk)
+
+# ----------------- Live Game -----------------
+def live_game(game_pk):
+    try:
+        while True:
+            data = get_json(f'{BASE}/game/{game_pk}/feed/live')
+            live = data.get('liveData', {})
+            boxscore = live.get('boxscore', {})
+            plays = live.get('plays', {}).get('allPlays', [])
+            linescore = live.get('linescore', {})
+            inning = linescore.get('currentInning',0)
+            inning_half = linescore.get('inningHalf','Top')
+            outs = linescore.get('outs',0)
+            balls = linescore.get('balls',0)
+            strikes = linescore.get('strikes',0)
+            home_team = linescore.get('teams',{}).get('home',{}).get('team',{}).get('name','')
+            away_team = linescore.get('teams',{}).get('away',{}).get('team',{}).get('name','')
+            home_score = linescore.get('teams',{}).get('home',{}).get('runs',0)
+            away_score = linescore.get('teams',{}).get('away',{}).get('runs',0)
+            current_play = live.get('plays', {}).get('currentPlay', {}).get('matchup', {})
+            batter = current_play.get('batter',{}).get('fullName','Unknown')
+            pitcher = current_play.get('pitcher',{}).get('fullName','Unknown')
+            home_lineup = [p['person']['fullName'] + '('+p['position']['abbreviation']+')' for p in boxscore.get('teams',{}).get('home',{}).get('players',{}).values()]
+            away_lineup = [p['person']['fullName'] + '('+p['position']['abbreviation']+')' for p in boxscore.get('teams',{}).get('away',{}).get('players',{}).values()]
+            last_5 = plays[-5:] if len(plays)>=5 else plays
+
+            clear_terminal()
+            print(f"⚾ Live Game: {away_team} @ {home_team}")
+            print(f"Inning: {inning_half} {inning}, Outs: {outs}, Balls: {balls}, Strikes: {strikes}")
+            print(f"Score: {away_team} {away_score} - {home_team} {home_score}")
+            print(f"Batter: {batter} vs Pitcher: {pitcher}\n")
+            print("Home Lineup:")
+            print(', '.join(home_lineup))
+            print("\nAway Lineup:")
+            print(', '.join(away_lineup))
+            print("\nLast 5 Plays:")
+            for play in last_5:
+                desc = play.get('result',{}).get('description','')
+                inning_play = play.get('about',{}).get('inning',0)
+                print(f"Inning {inning_play}: {desc}")
+
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\nExiting live game...")
+
+# ----------------- Player Search -----------------
+def player_search(name):
+    teams = get_json(f'{BASE}/teams', {'sportId':1}).get('teams',[])
+    found = []
+    for t in teams:
+        roster = get_json(f'{BASE}/teams/{t["id"]}/roster').get('roster',[])
+        for p in roster:
+            full_name = p['person']['fullName']
+            if name.lower() in full_name.lower():
+                found.append((p, t['name']))
+    if not found:
+        print(f"No player found with '{name}'")
+        return
+    current_year = datetime.today().year
+    for p, team_name in found:
+        person = p['person']
+        pos = p.get('position', {}).get('abbreviation','')
+        print(f"{person['fullName']} - Team: {team_name} - Position: {pos}")
+        stats = get_json(f'{BASE}/people/{person['id']}/stats', {'stats':'season','season':current_year})
+        if stats.get('stats') and stats['stats'][0]['splits']:
+            split = stats['stats'][0]['splits'][0]['stat']
+            print(f"  {current_year} G:{split.get('games',0)} AVG:{split.get('avg','N/A')} HR:{split.get('homeRuns',0)}")
+        else:
+            print(f"  No stats available for {current_year}")
+
+# ----------------- Standings -----------------
+def show_standings():
+    data = get_json(f'{BASE}/standings?leagueId=103,104').get('records',[])
+    for division in data:
+        div_name = division.get('division', {}).get('name','Unknown Division')
+        table = PrettyTable()
+        table.field_names = ["Team","W","L","Win%","GB","Home","Away","RS/G","RA/G","Streak"]
+        for team_record in division.get('teamRecords',[]):
+            team = team_record.get('team',{}).get('name','Unknown')
+            w = team_record.get('wins',0)
+            l = team_record.get('losses',0)
+            pct = team_record.get('winningPercentage','0')
+            gb = team_record.get('gamesBack','0')
+            home = f"{team_record.get('homeWins',0)}-{team_record.get('homeLosses',0)}"
+            away = f"{team_record.get('awayWins',0)}-{team_record.get('awayLosses',0)}"
+            rs = round(team_record.get('runsScoredPerGame',0),2)
+            ra = round(team_record.get('runsAllowedPerGame',0),2)
+            streak = team_record.get('streak',{}).get('streakCode','')
+            table.add_row([team,w,l,pct,gb,home,away,rs,ra,streak])
+        print(f"\n=== {div_name} ===")
+        print(table)
+
+# ----------------- Lineups -----------------
+def show_lineups(game_pk):
+    data = get_json(f'{BASE}/game/{game_pk}/feed/live')
+    boxscore = data.get('liveData',{}).get('boxscore',{})
+    def print_team_lineup(team):
+        team_name = team.get('team',{}).get('name','Unknown')
+        print(f"\n⚾ {team_name} Lineup")
+        table = PrettyTable()
+        table.field_names = ["Order","Player","Pos","Status"]
+        players = team.get('players',{}).values()
+        for p in sorted(players,key=lambda x: x.get('battingOrder',0)):
+            order = p.get('battingOrder',0)
+            name = p['person']['fullName']
+            pos = p.get('position',{}).get('abbreviation','')
+            status = p.get('status',{}).get('description','Active')
+            table.add_row([order,name,pos,status])
+        print(table)
+    home_team = boxscore.get('teams',{}).get('home',{})
+    away_team = boxscore.get('teams',{}).get('away',{})
+    print_team_lineup(away_team)
+    print_team_lineup(home_team)
+
+# ----------------- Game Box Score -----------------
+def game_box_score(game_pk):
+    data = get_json(f'{BASE}/game/{game_pk}/boxscore')
+    if not data:
+        print("No box score data available.")
+        return
+    home_team = data.get('teams',{}).get('home',{})
+    away_team = data.get('teams',{}).get('away',{})
+    def print_team_box(team):
+        print(f"\n{team.get('team',{}).get('name','Unknown Team')}")
+        table = PrettyTable()
+        table.field_names = ["Player","Pos","AB","R","H","RBI","BB","SO","LOB"]
+        for p in team.get('players',{}).values():
+            stats = p.get('stats',{}).get('batting',{})
+            table.add_row([
+                p['person']['fullName'],
+                p.get('position',{}).get('abbreviation',''),
+                stats.get('atBats',0),
+                stats.get('runs',0),
+                stats.get('hits',0),
+                stats.get('rbi',0),
+                stats.get('baseOnBalls',0),
+                stats.get('strikeOuts',0),
+                stats.get('leftOnBase',0)
+            ])
+        print(table)
+    def print_linescore(team):
+        linescore = team.get('linescore',{})
+        print(f"\n{team.get('team',{}).get('name','')} Linescore:")
+        print("Inning: ", end="")
+        for i, r in enumerate(linescore.get('innings',[]), start=1):
+            print(f"{i}", end="\t")
+        print("\nRuns:   ", end="")
+        for r in linescore.get('runs',[]):
+            print(f"{r}", end="\t")
+        print(f"\nTotal R: {linescore.get('runsScored',0)}, H: {linescore.get('hits',0)}, E: {linescore.get('errors',0)}")
+    print_linescore(away_team)
+    print_team_box(away_team)
+    print_linescore(home_team)
+    print_team_box(home_team)
+
+# ----------------- Team Weekly Schedule -----------------
+def get_team_id(name):
+    teams = get_json(f'{BASE}/teams', {'sportId':1}).get('teams',[])
+    for t in teams:
+        if name.lower() in t['name'].lower():
+            return t['id']
+    return None
+
+def team_weekly_schedule(team_name):
+    today = datetime.today()
+    end_date = today + timedelta(days=7)
+    team_id = get_team_id(team_name)
+    if not team_id:
+        print(f"Team '{team_name}' not found.")
+        return
+    schedule_data = get_json(f'{BASE}/schedule/games', {
+        'sportId':1, 'teamId':team_id,
+        'startDate':today.strftime('%Y-%m-%d'),
+        'endDate':end_date.strftime('%Y-%m-%d')
+    })
+    games = []
+    if schedule_data.get('dates'):
+        for date_info in schedule_data['dates']:
+            for g in date_info.get('games', []):
+                games.append(g)
+    if not games:
+        print(f"No games found for {team_name} in the next 7 days.")
+        return
+    print(f"\n📅 {team_name} - Next 7 Days Schedule:")
+    for idx, game in enumerate(games, start=1):
+        home = game['teams']['home']['team']['name']
+        away = game['teams']['away']['team']['name']
+        status = game['status']['detailedState']
+        start_time = game['gameDate'].replace('T',' ').replace('Z','')
+        location = 'Home' if home==team_name else 'Away'
+        game_pk = game.get('gamePk',0)
+        print(f"{idx}. {start_time} | {away} @ {home} | {status} | {location} | Game ID: {game_pk}")
+    choice = input("Enter game number to view live game/box score (or Enter to skip): ")
+    if choice.isdigit() and 1 <= int(choice) <= len(games):
+        game_pk = games[int(choice)-1].get('gamePk',0)
+        live_game(game_pk)
+
+# ----------------- Injuries -----------------
+def get_injuries():
+    print("⚠️ Injuries data is not available from the MLB API.")
+    return []
+
+# ----------------- CLI Main -----------------
+def main():
+    while True:
+        print("\n⚾ MLB Games CLI")
+        print("1. Today's Games")
+        print("2. Standings")
+        print("3. Lineups")
+        print("4. Live Game")
+        print("5. Player Search")
+        print("6. Injuries")
+        print("7. Team Weekly Schedule")
+        print("8. Game Box Score")
+        print("9. Exit")
+        choice = input("> ")
+        if choice=='1':
+            todays_games()
+        elif choice=='2':
+            show_standings()
+        elif choice=='3':
+            game_pk = input("Enter game ID for lineups: ")
+            if game_pk.isdigit(): show_lineups(int(game_pk))
+        elif choice=='4':
+            game_pk = input("Enter game ID for live game: ")
+            if game_pk.isdigit(): live_game(int(game_pk))
+        elif choice=='5':
+            name = input("Enter player name: ")
+            player_search(name)
+        elif choice=='6':
+            get_injuries()
+        elif choice=='7':
+            team_name = input("Enter team name: ")
+            team_weekly_schedule(team_name)
+        elif choice=='8':
+            game_pk = input("Enter game ID for box score: ")
+            if game_pk.isdigit(): game_box_score(int(game_pk))
+        elif choice=='9':
+            print("Exiting CLI.")
+            break
+        else:
+            print("Invalid option.")
+
+if __name__=='__main__':
+    main()
